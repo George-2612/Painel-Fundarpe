@@ -2,17 +2,10 @@ import { useState, useMemo, useEffect } from 'react';
 import Papa from 'papaparse';
 import { Search, RefreshCw, Calendar, Landmark, MapPin, Music2, FileSpreadsheet, DollarSign, X, Download, ChevronLeft, ChevronRight, Clock, CheckCircle2, Check, SlidersHorizontal } from 'lucide-react';
 
-const BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRJpdaEW0-OqWzkmCtOK0aVpPl7V6-ZwPAY0wVeeM9ZmO2Z8xTB_vSUSjHgtPk0bE7hTR8comhnpdia/pub?single=true&output=csv&gid=';
-
-const ABAS_CONFIG = [
-  { ano: '2023', gid: '0' },
-  { ano: '2024', gid: '725138225' },
-  { ano: '2025', gid: '2003151629' },
-  { ano: '2026', gid: '1866521137' },
-];
+const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTR8hO5DKksGF2QwmnTF_djLiUW-k-fOVPy7egBENpz7XFe4VE9DUo19voruZv2jn9A4nkS6LwgCc-9/pub?gid=188948899&single=true&output=csv';
 
 interface ItemBase {
-  ANO: number | string;
+  ANO: string;
   'Protocolo SEI': string;
   'Nome da Atração': string;
   Ciclo: string;
@@ -21,7 +14,7 @@ interface ItemBase {
   Data: string;
   Credor: string;
   'CPF/CNPJ': string;
-  'Qtd Integrantes': number;
+  'Qtd Integrantes': number | string;
   Duração: string;
   Valor: string | number;
   'Nº Empenho': string;
@@ -37,54 +30,120 @@ export default function App() {
   const [carregando, setCarregando] = useState(true);
   const [menuFiltrosAberto, setMenuFiltrosAberto] = useState(false);
 
-  // Filtros
+  // Filtros (Sem Ciclo/Evento)
   const [anoSelecionado, setAnoSelecionado] = useState('Todos');
   const [busca, setBusca] = useState('');
   const [muniFiltro, setMuniFiltro] = useState('Todos');
-  const [cicloFiltro, setCicloFiltro] = useState('Todos');
   const [statusPagoFiltro, setStatusPagoFiltro] = useState('Todos');
 
   // Paginação
   const [paginaAtual, setPaginaAtual] = useState(1);
   const [itensPorPagina, setItensPorPagina] = useState(20);
 
-  const carregarTodasAsAbas = async () => {
-    setCarregando(true);
-    try {
-      const promessas = ABAS_CONFIG.map((aba) => {
-        return new Promise<ItemBase[]>((resolve) => {
-          Papa.parse(`${BASE_URL}${aba.gid}`, {
-            download: true,
-            header: true,
-            skipEmptyLines: true,
-            complete: (results) => {
-              const dadosTratados = (results.data as ItemBase[]).map((item) => ({
-                ...item,
-                ANO: item.ANO || aba.ano,
-              }));
-              resolve(dadosTratados);
-            },
-            error: () => resolve([]),
-          });
-        });
-      });
+  // Normalizador universal de chaves da planilha
+  const normalizarChave = (str: string) => {
+    return str
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+  };
 
-      const resultadosPorAba = await Promise.all(promessas);
-      setTodosDados(resultadosPorAba.flat());
-    } catch {
-      setTodosDados([]);
-    } finally {
-      setCarregando(false);
+  const extrairValorFlexivel = (item: Record<string, any>, chavesPossiveis: string[]): string => {
+    const mapaNormalizado: Record<string, any> = {};
+    for (const [k, v] of Object.entries(item)) {
+      mapaNormalizado[normalizarChave(k)] = v;
     }
+
+    for (const chave of chavesPossiveis) {
+      const norm = normalizarChave(chave);
+      if (mapaNormalizado[norm] !== undefined && mapaNormalizado[norm] !== null && String(mapaNormalizado[norm]).trim() !== '') {
+        return String(mapaNormalizado[norm]).trim();
+      }
+    }
+    return '';
+  };
+
+  const normalizarLinha = (raw: Record<string, any>): ItemBase => {
+    const sei = extrairValorFlexivel(raw, ['Protocolo SEI', 'SEI', 'Protocolo', 'Numero SEI', 'N SEI']);
+    const empenho = extrairValorFlexivel(raw, ['Nº Empenho', 'Empenho', 'Numero Empenho', 'NE', 'N Empenho']);
+    const atraca = extrairValorFlexivel(raw, ['Nome da Atração', 'Atração', 'Atracao', 'Artista', 'Nome Atracao', 'Banda']);
+    const credor = extrairValorFlexivel(raw, ['Credor', 'Nome Credor', 'Beneficiario', 'Proponente']);
+    const municipio = extrairValorFlexivel(raw, ['Municipio', 'Município', 'Cidade', 'Municipio Evento']);
+    const data = extrairValorFlexivel(raw, ['Data', 'Data Evento', 'Data Apresentação', 'Data da Apresentacao', 'Data Apresentacao']);
+    const ciclo = extrairValorFlexivel(raw, ['Ciclo', 'Ciclo Evento', 'Tipo Evento', 'Evento']);
+    const nomeEvento = extrairValorFlexivel(raw, ['Nome do Evento', 'Evento', 'Nome Evento', 'Ciclo']);
+    const doc = extrairValorFlexivel(raw, ['CPF/CNPJ', 'CPF', 'CNPJ', 'Documento']);
+    const valor = extrairValorFlexivel(raw, ['Valor', 'Valor Cache', 'Valor Cachê', 'Cache', 'Valor Total']);
+    const status = extrairValorFlexivel(raw, ['Status Prestação de Contas', 'Status', 'Situacao', 'Situação', 'Status Pagamento', 'Pago']);
+    const dataGaf = extrairValorFlexivel(raw, ['Data Envio GAF', 'Data GAF', 'Data Pagamento']);
+    const dataPrestacao = extrairValorFlexivel(raw, ['Data Recebimento Prestação', 'Data Prestacao']);
+
+    // Extrair Ano com múltiplas tentativas
+    let ano = extrairValorFlexivel(raw, ['ANO', 'Ano', 'Exercicio', 'Exercício']);
+    if (!ano || !/^\d{4}$/.test(ano)) {
+      const matchSei = sei.match(/\/(\d{4})-/);
+      if (matchSei) ano = matchSei[1];
+    }
+    if (!ano || !/^\d{4}$/.test(ano)) {
+      const matchEmp = empenho.match(/^(\d{4})/);
+      if (matchEmp) ano = matchEmp[1];
+    }
+    if (!ano || !/^\d{4}$/.test(ano)) {
+      const matchData = data.match(/(\d{4})/);
+      if (matchData) ano = matchData[1];
+    }
+
+    return {
+      ANO: ano || '2024',
+      'Protocolo SEI': sei,
+      'Nome da Atração': atraca,
+      Ciclo: ciclo,
+      'Nome do Evento': nomeEvento,
+      Municipio: municipio,
+      Data: data,
+      Credor: credor,
+      'CPF/CNPJ': doc,
+      'Qtd Integrantes': 1,
+      Duração: '',
+      Valor: valor,
+      'Nº Empenho': empenho,
+      Categoria: '',
+      'Municipio de Origem': '',
+      'Status Prestação de Contas': status,
+      'Data Envio GAF': dataGaf,
+      'Data Recebimento Prestação': dataPrestacao,
+    };
+  };
+
+  const carregarDados = () => {
+    setCarregando(true);
+    Papa.parse(CSV_URL, {
+      download: true,
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const dados = (results.data as Record<string, any>[])
+          .map(normalizarLinha)
+          .filter((item) => item['Nome da Atração'] || item.Credor || item['Protocolo SEI'] || item['Nº Empenho']);
+
+        setTodosDados(dados);
+        setCarregando(false);
+      },
+      error: () => {
+        setTodosDados([]);
+        setCarregando(false);
+      },
+    });
   };
 
   useEffect(() => {
-    carregarTodasAsAbas();
+    carregarDados();
   }, []);
 
   useEffect(() => {
     setPaginaAtual(1);
-  }, [anoSelecionado, busca, muniFiltro, cicloFiltro, statusPagoFiltro]);
+  }, [anoSelecionado, busca, muniFiltro, statusPagoFiltro]);
 
   const parseValor = (val: string | number | undefined): number => {
     if (!val) return 0;
@@ -94,24 +153,19 @@ export default function App() {
     return isNaN(numero) ? 0 : numero;
   };
 
-  // Converte data do Excel/Sheets (seja número serial como 44954 ou string DD/MM/AAAA) em objeto Date
   const converterParaObjetoData = (val: string | number | undefined): Date | null => {
     if (!val) return null;
-
     const valStr = String(val).trim();
     if (!valStr) return null;
 
-    // Se for número serial do Excel / Google Sheets (ex: 44954)
     if (/^\d{5}$/.test(valStr)) {
       const serial = parseInt(valStr, 10);
-      // O Excel conta dias a partir de 30/12/1899
       const utcDays = serial - 25569;
       const utcValue = utcDays * 86400;
       const dateInfo = new Date(utcValue * 1000);
       return new Date(dateInfo.getUTCFullYear(), dateInfo.getUTCMonth(), dateInfo.getUTCDate());
     }
 
-    // Se for formato DD/MM/AAAA
     if (valStr.includes('/')) {
       const partes = valStr.split('/');
       if (partes.length === 3) {
@@ -124,7 +178,6 @@ export default function App() {
       }
     }
 
-    // Se for formato ISO AAAA-MM-DD
     if (valStr.includes('-')) {
       const partes = valStr.split('-');
       if (partes.length === 3) {
@@ -140,7 +193,6 @@ export default function App() {
     return null;
   };
 
-  // Formata o valor bruto da planilha para string 'DD/MM/AAAA'
   const formatarDataSheet = (val: string | number | undefined): string => {
     const dataObj = converterParaObjetoData(val);
     if (!dataObj) return String(val || 'N/A');
@@ -152,12 +204,10 @@ export default function App() {
     return `${diaFmt}/${mesFmt}/${anoFmt}`;
   };
 
-  // Calcula 35 dias corridos após a data da apresentação
   const calcularDataPagamentoPrevista = (dataStr: string | number | undefined): string => {
     const dataEvento = converterParaObjetoData(dataStr);
     if (!dataEvento) return 'A definir';
 
-    // Adiciona 35 dias
     dataEvento.setDate(dataEvento.getDate() + 35);
 
     const diaFmt = String(dataEvento.getDate()).padStart(2, '0');
@@ -167,7 +217,6 @@ export default function App() {
     return `${diaFmt}/${mesFmt}/${anoFmt}`;
   };
 
-  // Obtém a data real de pagamento se pago
   const obterDataPagamentoRealizado = (item: ItemBase): string => {
     if (item['Data Envio GAF']) return formatarDataSheet(item['Data Envio GAF']);
     if (item['Data Recebimento Prestação']) return formatarDataSheet(item['Data Recebimento Prestação']);
@@ -179,34 +228,26 @@ export default function App() {
     setAnoSelecionado('Todos');
     setBusca('');
     setMuniFiltro('Todos');
-    setCicloFiltro('Todos');
     setStatusPagoFiltro('Todos');
   };
 
   const anosDisponiveis = useMemo(() => {
-    const lista = todosDados.map((d) => String(d.ANO)).filter((a) => a && a !== 'undefined' && a !== 'null');
-    return ['Todos', ...Array.from(new Set(lista)).sort()];
+    const lista = todosDados.map((d) => String(d.ANO).trim()).filter((a) => a && a !== 'undefined' && a !== 'null');
+    const unicos = Array.from(new Set(lista)).sort();
+    return unicos.length > 0 ? ['Todos', ...unicos] : ['Todos', '2023', '2024', '2025', '2026'];
   }, [todosDados]);
 
   const municipios = useMemo(() => {
     const lista = todosDados.map((d) => d.Municipio).filter(Boolean);
-    return ['Todos', ...Array.from(new Set(lista))];
-  }, [todosDados]);
-
-  const ciclosPrincipais = useMemo(() => {
-    const lista = todosDados.map((d) => (d.Ciclo || d['Nome do Evento'] || '').trim()).filter(Boolean);
-    return ['Todos', ...Array.from(new Set(lista))];
+    return ['Todos', ...Array.from(new Set(lista)).sort()];
   }, [todosDados]);
 
   const dadosFiltrados = useMemo(() => {
     return todosDados.filter((item) => {
-      const bateAno = anoSelecionado === 'Todos' || String(item.ANO) === anoSelecionado;
+      const bateAno = anoSelecionado === 'Todos' || String(item.ANO).trim() === anoSelecionado;
       const bateMuni = muniFiltro === 'Todos' || item.Municipio === muniFiltro;
 
-      const cicloItem = (item.Ciclo || item['Nome do Evento'] || '').trim();
-      const bateCiclo = cicloFiltro === 'Todos' || cicloItem === cicloFiltro;
-
-      const isPago = String(item['Status Prestação de Contas'] || '').trim().toLowerCase() === 'pago';
+      const isPago = String(item['Status Prestação de Contas'] || '').trim().toLowerCase().includes('pago');
       let bateStatus = true;
       if (statusPagoFiltro === 'SIM') bateStatus = isPago;
       if (statusPagoFiltro === 'NAO') bateStatus = !isPago;
@@ -220,13 +261,13 @@ export default function App() {
         (item['Nº Empenho'] && item['Nº Empenho'].toLowerCase().includes(termo)) ||
         (item.Municipio && item.Municipio.toLowerCase().includes(termo));
 
-      return bateAno && bateMuni && bateCiclo && bateStatus && bateBusca;
+      return bateAno && bateMuni && bateStatus && bateBusca;
     });
-  }, [todosDados, anoSelecionado, muniFiltro, cicloFiltro, statusPagoFiltro, busca]);
+  }, [todosDados, anoSelecionado, muniFiltro, statusPagoFiltro, busca]);
 
   const totalEfetivamentePago = useMemo(() => {
     return dadosFiltrados
-      .filter((d) => String(d['Status Prestação de Contas']).trim().toLowerCase() === 'pago')
+      .filter((d) => String(d['Status Prestação de Contas']).trim().toLowerCase().includes('pago'))
       .reduce((acc, curr) => acc + parseValor(curr.Valor), 0);
   }, [dadosFiltrados]);
 
@@ -242,7 +283,7 @@ export default function App() {
 
   const exportarCSV = () => {
     const dadosExportacao = dadosFiltrados.map((item) => {
-      const isPago = String(item['Status Prestação de Contas'] || '').trim().toLowerCase() === 'pago';
+      const isPago = String(item['Status Prestação de Contas'] || '').trim().toLowerCase().includes('pago');
       return {
         ...item,
         'Pago?': isPago ? 'Sim' : 'Não',
@@ -255,7 +296,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `fundarpe_transparencia_${cicloFiltro}_${anoSelecionado}.csv`);
+    link.setAttribute('download', `fundarpe_transparencia_${anoSelecionado}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -271,7 +312,7 @@ export default function App() {
     return new Set(lista).size;
   }, [dadosFiltrados]);
 
-  const temFiltroAtivo = busca || muniFiltro !== 'Todos' || cicloFiltro !== 'Todos' || anoSelecionado !== 'Todos' || statusPagoFiltro !== 'Todos';
+  const temFiltroAtivo = busca || muniFiltro !== 'Todos' || anoSelecionado !== 'Todos' || statusPagoFiltro !== 'Todos';
 
   return (
     <div className="min-h-screen w-full bg-slate-100 text-slate-800 font-sans pb-12 overflow-x-hidden">
@@ -280,7 +321,6 @@ export default function App() {
       <header className="sticky top-0 z-50 w-full bg-[#002F67] border-b-2 border-[#001a3a] shadow-md px-4 sm:px-6 py-3">
         <div className="w-full flex flex-col lg:flex-row items-center justify-between gap-3">
           
-          {/* MARCA INSTITUCIONAL */}
           <div className="w-full lg:w-auto flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="bg-[#001d42] text-white p-2 rounded-lg border border-[#00408a]">
@@ -292,7 +332,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* CONTROLES MOBILE */}
             <div className="flex items-center gap-2 lg:hidden">
               <button
                 onClick={() => setMenuFiltrosAberto(!menuFiltrosAberto)}
@@ -303,7 +342,7 @@ export default function App() {
               </button>
 
               <button
-                onClick={carregarTodasAsAbas}
+                onClick={carregarDados}
                 className="bg-sky-500 text-[#002F67] font-bold p-1.5 rounded-lg"
                 title="Sincronizar dados"
               >
@@ -312,10 +351,8 @@ export default function App() {
             </div>
           </div>
 
-          {/* FILTROS DROPDOWN */}
           <div className={`${menuFiltrosAberto ? 'flex' : 'hidden lg:flex'} flex-col lg:flex-row flex-wrap items-stretch lg:items-center gap-2 w-full lg:w-auto flex-1 max-w-5xl justify-end`}>
             
-            {/* BUSCA RÁPIDA */}
             <div className="relative min-w-[180px] flex-1">
               <Search className="w-3.5 h-3.5 text-sky-300 absolute left-3 top-2.5" />
               <input
@@ -327,8 +364,7 @@ export default function App() {
               />
             </div>
 
-            {/* DROPDOWNS */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:flex lg:items-center gap-2 w-full lg:w-auto">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:flex lg:items-center gap-2 w-full lg:w-auto">
               
               <div className="flex items-center gap-1.5 bg-[#001e42] border border-[#00408a] px-3 py-1.5 rounded-lg">
                 <DollarSign className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -353,16 +389,6 @@ export default function App() {
                 ))}
               </select>
 
-              <select
-                value={cicloFiltro}
-                onChange={(e) => setCicloFiltro(e.target.value)}
-                className="bg-[#001e42] border border-[#00408a] text-white px-3 py-1.5 rounded-lg text-xs font-semibold focus:outline-none cursor-pointer truncate max-w-[200px]"
-              >
-                {ciclosPrincipais.map((c) => (
-                  <option key={c} value={c} className="bg-[#002F67]">{c === 'Todos' ? 'Evento/Ciclo: Todos' : c}</option>
-                ))}
-              </select>
-
               <div className="flex items-center gap-1.5 bg-[#001e42] border border-[#00408a] px-3 py-1.5 rounded-lg">
                 <Calendar className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                 <select
@@ -380,7 +406,6 @@ export default function App() {
 
             </div>
 
-            {/* BOTÃO LIMPAR E REFRESH DESKTOP */}
             <div className="flex items-center justify-end gap-2 mt-1 lg:mt-0">
               {temFiltroAtivo && (
                 <button
@@ -392,7 +417,7 @@ export default function App() {
               )}
 
               <button
-                onClick={carregarTodasAsAbas}
+                onClick={carregarDados}
                 className="hidden lg:flex items-center bg-sky-500 hover:bg-sky-400 text-[#002F67] font-bold p-2 rounded-lg"
                 title="Sincronizar dados"
               >
@@ -462,10 +487,9 @@ export default function App() {
                     {carregando ? '...' : `R$ ${totalEfetivamentePago.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                   </h3>
                 </div>
-                <div className="p-2 sm:p-2.5 bg-emerald-500/10 text-emerald-400 rounded-lg shrink-0"><DollarSign className="w-4 h-4 sm:w-5 sm:h-5" /></div>
+                <div className="p-2 sm:p-2.5 bg-emerald-50 text-emerald-400 rounded-lg shrink-0"><DollarSign className="w-4 h-4 sm:w-5 sm:h-5" /></div>
               </div>
 
-              {/* VALOR CONSULTA DESTACADO */}
               <div className="mt-2.5 pt-2 border-t border-blue-900/80 flex items-center justify-between bg-blue-950/60 p-2 rounded-lg border border-blue-800/50">
                 <span className="text-[9px] sm:text-[10px] text-blue-300 font-extrabold uppercase tracking-wide">
                   Valor Consulta (Total):
@@ -484,7 +508,7 @@ export default function App() {
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 border-b border-slate-100 pb-3">
             <div>
               <h2 className="text-sm sm:text-base font-bold text-[#002F67]">
-                Relatório Detalhado de Apresentações e Pagamentos {cicloFiltro !== 'Todos' && `— ${cicloFiltro}`} {anoSelecionado !== 'Todos' && `(${anoSelecionado})`}
+                Relatório Detalhado de Apresentações e Pagamentos {anoSelecionado !== 'Todos' && `(${anoSelecionado})`}
               </h2>
               <p className="text-[11px] sm:text-xs text-slate-500">
                 Data real do pagamento exibida para processos pagos e previsão de +35 dias para os pendentes
@@ -507,7 +531,7 @@ export default function App() {
 
           <div className="overflow-x-auto w-full border border-slate-100 rounded-xl">
             {carregando ? (
-              <div className="text-center py-12 text-slate-500 font-medium text-xs">Sincronizando planilha...</div>
+              <div className="text-center py-12 text-slate-500 font-medium text-xs">Sincronizando planilha consolidada...</div>
             ) : dadosFiltrados.length === 0 ? (
               <div className="text-center py-12 text-slate-500 font-medium text-xs">Nenhum registro encontrado para os filtros selecionados.</div>
             ) : (
@@ -528,7 +552,7 @@ export default function App() {
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {dadosPaginados.map((item, idx) => {
                     const statusLower = String(item['Status Prestação de Contas'] || '').trim().toLowerCase();
-                    const isPago = statusLower === 'pago';
+                    const isPago = statusLower.includes('pago');
                     const dataPrevista = calcularDataPagamentoPrevista(item.Data);
                     const dataPagamentoReal = obterDataPagamentoRealizado(item);
                     const dataEventoFormatada = formatarDataSheet(item.Data);
@@ -584,7 +608,7 @@ export default function App() {
             )}
           </div>
 
-          {/* BARRA DE PAGINAÇÃO RESPONSIVA */}
+          {/* BARRA DE PAGINAÇÃO */}
           {!carregando && dadosFiltrados.length > 0 && (
             <div className="flex flex-col sm:flex-row justify-between items-center gap-3 mt-4 pt-3 border-t border-slate-100 text-xs text-slate-600">
               <div className="flex items-center gap-2">
