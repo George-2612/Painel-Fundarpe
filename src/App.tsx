@@ -2,7 +2,16 @@ import { useState, useMemo, useEffect } from 'react';
 import Papa from 'papaparse';
 import { Search, RefreshCw, Calendar, Landmark, MapPin, Music2, FileSpreadsheet, DollarSign, X, Download, ChevronLeft, ChevronRight, Clock, CheckCircle2, Check, SlidersHorizontal } from 'lucide-react';
 
-const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTR8hO5DKksGF2QwmnTF_djLiUW-k-fOVPy7egBENpz7XFe4VE9DUo19voruZv2jn9A4nkS6LwgCc-9/pub?gid=188948899&single=true&output=csv';
+// URL BASE DA PLANILHA
+const BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRJpdaEW0-OqWzkmCtOK0aVpPl7V6-ZwPAY0wVeeM9ZmO2Z8xTB_vSUSjHgtPk0bE7hTR8comhnpdia/pub?single=true&output=csv&gid=';
+
+// CONFIGURAÇÃO DAS ABAS DA PLANILHA
+const ABAS_CONFIG = [
+  { ano: '2023', gid: '0' },
+  { ano: '2024', gid: '725138225' },
+  { ano: '2025', gid: '2003151629' },
+  { ano: '2026', gid: '1866521137' },
+];
 
 interface ItemBase {
   ANO: string;
@@ -30,7 +39,7 @@ export default function App() {
   const [carregando, setCarregando] = useState(true);
   const [menuFiltrosAberto, setMenuFiltrosAberto] = useState(false);
 
-  // Filtros (Sem Ciclo/Evento)
+  // Filtros
   const [anoSelecionado, setAnoSelecionado] = useState('Todos');
   const [busca, setBusca] = useState('');
   const [muniFiltro, setMuniFiltro] = useState('Todos');
@@ -40,7 +49,6 @@ export default function App() {
   const [paginaAtual, setPaginaAtual] = useState(1);
   const [itensPorPagina, setItensPorPagina] = useState(20);
 
-  // Normalizador universal de chaves da planilha
   const normalizarChave = (str: string) => {
     return str
       .toLowerCase()
@@ -64,38 +72,46 @@ export default function App() {
     return '';
   };
 
-  const normalizarLinha = (raw: Record<string, any>): ItemBase => {
+  const formatarNomeMunicipio = (nome: string): string => {
+    if (!nome) return '';
+    const limpo = nome.trim().replace(/\s+/g, ' ');
+    if (limpo.length < 2) return '';
+    return limpo
+      .toLowerCase()
+      .split(' ')
+      .map(palavra => {
+        const excecoes = ['de', 'da', 'do', 'das', 'dos', 'e'];
+        if (excecoes.includes(palavra)) return palavra;
+        return palavra.charAt(0).toUpperCase() + palavra.slice(1);
+      })
+      .join(' ');
+  };
+
+  const normalizarLinha = (raw: Record<string, any>, anoAba: string): ItemBase => {
     const sei = extrairValorFlexivel(raw, ['Protocolo SEI', 'SEI', 'Protocolo', 'Numero SEI', 'N SEI']);
     const empenho = extrairValorFlexivel(raw, ['Nº Empenho', 'Empenho', 'Numero Empenho', 'NE', 'N Empenho']);
-    const atraca = extrairValorFlexivel(raw, ['Nome da Atração', 'Atração', 'Atracao', 'Artista', 'Nome Atracao', 'Banda']);
+    const atraca = extrairValorFlexivel(raw, ['Nome da Atração', 'Atração', 'Atracao', 'Artista', 'Nome Atracao', 'Banda', 'Nome da Atrac']);
     const credor = extrairValorFlexivel(raw, ['Credor', 'Nome Credor', 'Beneficiario', 'Proponente']);
-    const municipio = extrairValorFlexivel(raw, ['Municipio', 'Município', 'Cidade', 'Municipio Evento']);
+    const municipioBruto = extrairValorFlexivel(raw, ['Municipio', 'Município', 'Cidade', 'Municipio Evento']);
+    const municipio = formatarNomeMunicipio(municipioBruto);
+    
     const data = extrairValorFlexivel(raw, ['Data', 'Data Evento', 'Data Apresentação', 'Data da Apresentacao', 'Data Apresentacao']);
     const ciclo = extrairValorFlexivel(raw, ['Ciclo', 'Ciclo Evento', 'Tipo Evento', 'Evento']);
-    const nomeEvento = extrairValorFlexivel(raw, ['Nome do Evento', 'Evento', 'Nome Evento', 'Ciclo']);
+    const nomeEvento = extrairValorFlexivel(raw, ['Nome do Evento', 'Evento', 'Nome Evento', 'Ciclo', 'Nome do Ev']);
     const doc = extrairValorFlexivel(raw, ['CPF/CNPJ', 'CPF', 'CNPJ', 'Documento']);
-    const valor = extrairValorFlexivel(raw, ['Valor', 'Valor Cache', 'Valor Cachê', 'Cache', 'Valor Total']);
-    const status = extrairValorFlexivel(raw, ['Status Prestação de Contas', 'Status', 'Situacao', 'Situação', 'Status Pagamento', 'Pago']);
-    const dataGaf = extrairValorFlexivel(raw, ['Data Envio GAF', 'Data GAF', 'Data Pagamento']);
-    const dataPrestacao = extrairValorFlexivel(raw, ['Data Recebimento Prestação', 'Data Prestacao']);
+    
+    const valor = extrairValorFlexivel(raw, ['Valor pós glosa', 'Valor pos glosa', 'Valor', 'Valor Cachê', 'Valor Cache', 'Cache', 'Valor Total', 'Valor Bruto']);
+    const status = extrairValorFlexivel(raw, ['Status Prestação de Contas', 'Status Prestação', 'Status Prestacao', 'Status Prest', 'Status', 'Situacao', 'Situação', 'Status Pagamento', 'Pago']);
+    const dataGaf = extrairValorFlexivel(raw, ['Data Envio GAF', 'Data envio DAF', 'Data GAF', 'Data Pagamento']);
+    const dataPrestacao = extrairValorFlexivel(raw, ['Data Recebimento Prestação', 'Data Recebime', 'Data Prestacao', 'Data Recebimento']);
 
-    // Extrair Ano com múltiplas tentativas
     let ano = extrairValorFlexivel(raw, ['ANO', 'Ano', 'Exercicio', 'Exercício']);
-    if (!ano || !/^\d{4}$/.test(ano)) {
-      const matchSei = sei.match(/\/(\d{4})-/);
-      if (matchSei) ano = matchSei[1];
-    }
-    if (!ano || !/^\d{4}$/.test(ano)) {
-      const matchEmp = empenho.match(/^(\d{4})/);
-      if (matchEmp) ano = matchEmp[1];
-    }
-    if (!ano || !/^\d{4}$/.test(ano)) {
-      const matchData = data.match(/(\d{4})/);
-      if (matchData) ano = matchData[1];
+    if (!ano || !/^\d{4}$/.test(ano) || Number(ano) < 2020) {
+      ano = anoAba;
     }
 
     return {
-      ANO: ano || '2024',
+      ANO: ano,
       'Protocolo SEI': sei,
       'Nome da Atração': atraca,
       Ciclo: ciclo,
@@ -116,29 +132,37 @@ export default function App() {
     };
   };
 
-  const carregarDados = () => {
+  const carregarTodasAsAbas = async () => {
     setCarregando(true);
-    Papa.parse(CSV_URL, {
-      download: true,
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const dados = (results.data as Record<string, any>[])
-          .map(normalizarLinha)
-          .filter((item) => item['Nome da Atração'] || item.Credor || item['Protocolo SEI'] || item['Nº Empenho']);
+    try {
+      const promessas = ABAS_CONFIG.map((aba) => {
+        return new Promise<ItemBase[]>((resolve) => {
+          Papa.parse(`${BASE_URL}${aba.gid}`, {
+            download: true,
+            header: true,
+            skipEmptyLines: true,
+            complete: (results) => {
+              const dadosTratados = (results.data as Record<string, any>[])
+                .map((raw) => normalizarLinha(raw, aba.ano))
+                .filter((item) => item['Nome da Atração'] || item.Credor || item['Protocolo SEI'] || item['Nº Empenho'] || item.Valor);
+              resolve(dadosTratados);
+            },
+            error: () => resolve([]),
+          });
+        });
+      });
 
-        setTodosDados(dados);
-        setCarregando(false);
-      },
-      error: () => {
-        setTodosDados([]);
-        setCarregando(false);
-      },
-    });
+      const resultadosPorAba = await Promise.all(promessas);
+      setTodosDados(resultadosPorAba.flat());
+    } catch {
+      setTodosDados([]);
+    } finally {
+      setCarregando(false);
+    }
   };
 
   useEffect(() => {
-    carregarDados();
+    carregarTodasAsAbas();
   }, []);
 
   useEffect(() => {
@@ -148,7 +172,15 @@ export default function App() {
   const parseValor = (val: string | number | undefined): number => {
     if (!val) return 0;
     if (typeof val === 'number') return isNaN(val) ? 0 : val;
-    const limpo = String(val).replace(/R\$\s?/g, '').replace(/\./g, '').replace(',', '.').trim();
+    
+    // Remove R$, espaços normais e inquebráveis, pontos de milhar e troca vírgula por ponto
+    const limpo = String(val)
+      .replace(/R\$\s?/gi, '')
+      .replace(/[\s\u00A0\u200B]+/g, '')
+      .replace(/\./g, '')
+      .replace(',', '.')
+      .trim();
+
     const numero = parseFloat(limpo);
     return isNaN(numero) ? 0 : numero;
   };
@@ -232,14 +264,17 @@ export default function App() {
   };
 
   const anosDisponiveis = useMemo(() => {
-    const lista = todosDados.map((d) => String(d.ANO).trim()).filter((a) => a && a !== 'undefined' && a !== 'null');
+    const lista = todosDados
+      .map((d) => String(d.ANO).trim())
+      .filter((a) => a && a !== 'undefined' && a !== 'null' && Number(a) >= 2020);
     const unicos = Array.from(new Set(lista)).sort();
     return unicos.length > 0 ? ['Todos', ...unicos] : ['Todos', '2023', '2024', '2025', '2026'];
   }, [todosDados]);
 
   const municipios = useMemo(() => {
-    const lista = todosDados.map((d) => d.Municipio).filter(Boolean);
-    return ['Todos', ...Array.from(new Set(lista)).sort()];
+    const lista = todosDados.map((d) => d.Municipio).filter((m) => m && m.length > 1);
+    const unicos = Array.from(new Set(lista)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    return ['Todos', ...unicos];
   }, [todosDados]);
 
   const dadosFiltrados = useMemo(() => {
@@ -247,7 +282,9 @@ export default function App() {
       const bateAno = anoSelecionado === 'Todos' || String(item.ANO).trim() === anoSelecionado;
       const bateMuni = muniFiltro === 'Todos' || item.Municipio === muniFiltro;
 
-      const isPago = String(item['Status Prestação de Contas'] || '').trim().toLowerCase().includes('pago');
+      const statusTexto = String(item['Status Prestação de Contas'] || '').trim().toLowerCase();
+      const isPago = statusTexto.includes('pago');
+
       let bateStatus = true;
       if (statusPagoFiltro === 'SIM') bateStatus = isPago;
       if (statusPagoFiltro === 'NAO') bateStatus = !isPago;
@@ -342,7 +379,7 @@ export default function App() {
               </button>
 
               <button
-                onClick={carregarDados}
+                onClick={carregarTodasAsAbas}
                 className="bg-sky-500 text-[#002F67] font-bold p-1.5 rounded-lg"
                 title="Sincronizar dados"
               >
@@ -382,7 +419,7 @@ export default function App() {
               <select
                 value={muniFiltro}
                 onChange={(e) => setMuniFiltro(e.target.value)}
-                className="bg-[#001e42] border border-[#00408a] text-white px-3 py-1.5 rounded-lg text-xs font-semibold focus:outline-none cursor-pointer truncate"
+                className="bg-[#001e42] border border-[#00408a] text-white px-3 py-1.5 rounded-lg text-xs font-semibold focus:outline-none cursor-pointer truncate max-w-[200px]"
               >
                 {municipios.map((m) => (
                   <option key={m} value={m} className="bg-[#002F67]">{m === 'Todos' ? 'Município: Todos' : m}</option>
@@ -417,7 +454,7 @@ export default function App() {
               )}
 
               <button
-                onClick={carregarDados}
+                onClick={carregarTodasAsAbas}
                 className="hidden lg:flex items-center bg-sky-500 hover:bg-sky-400 text-[#002F67] font-bold p-2 rounded-lg"
                 title="Sincronizar dados"
               >
@@ -531,7 +568,7 @@ export default function App() {
 
           <div className="overflow-x-auto w-full border border-slate-100 rounded-xl">
             {carregando ? (
-              <div className="text-center py-12 text-slate-500 font-medium text-xs">Sincronizando planilha consolidada...</div>
+              <div className="text-center py-12 text-slate-500 font-medium text-xs">Sincronizando todas as abas da planilha...</div>
             ) : dadosFiltrados.length === 0 ? (
               <div className="text-center py-12 text-slate-500 font-medium text-xs">Nenhum registro encontrado para os filtros selecionados.</div>
             ) : (
