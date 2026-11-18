@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import Papa from 'papaparse';
-import { Search, RefreshCw, Calendar, Landmark, MapPin, Music2, FileSpreadsheet, DollarSign, X, Download, ChevronLeft, ChevronRight, Clock, CheckCircle2, Check, SlidersHorizontal } from 'lucide-react';
+import { Search, RefreshCw, Calendar, Landmark, MapPin, Music2, FileSpreadsheet, DollarSign, X, Download, ChevronLeft, ChevronRight, CheckCircle2, Check, SlidersHorizontal } from 'lucide-react';
 
 // URL BASE DA PLANILHA
 const BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRJpdaEW0-OqWzkmCtOK0aVpPl7V6-ZwPAY0wVeeM9ZmO2Z8xTB_vSUSjHgtPk0bE7hTR8comhnpdia/pub?single=true&output=csv&gid=';
@@ -30,6 +30,7 @@ interface ItemBase {
   Categoria: string;
   'Municipio de Origem': string;
   'Status Prestação de Contas': string;
+  'Data de Pagamento': string;
   'Data Recebimento Prestação'?: string;
   'Data Envio GAF'?: string;
 }
@@ -102,7 +103,9 @@ export default function App() {
     
     const valor = extrairValorFlexivel(raw, ['Valor pós glosa', 'Valor pos glosa', 'Valor', 'Valor Cachê', 'Valor Cache', 'Cache', 'Valor Total', 'Valor Bruto']);
     const status = extrairValorFlexivel(raw, ['Status Prestação de Contas', 'Status Prestação', 'Status Prestacao', 'Status Prest', 'Status', 'Situacao', 'Situação', 'Status Pagamento', 'Pago']);
-    const dataGaf = extrairValorFlexivel(raw, ['Data Envio GAF', 'Data envio DAF', 'Data GAF', 'Data Pagamento']);
+    const dataGaf = extrairValorFlexivel(raw, ['Data Envio GAF', 'Data envio DAF', 'Data GAF']);
+    // As quatro abas usam nomes distintos para a última coluna.
+    const dataPagamento = extrairValorFlexivel(raw, ['Data de Pagamento', 'Data do Pagamento Exclusiva', 'Data do pagamento']);
     const dataPrestacao = extrairValorFlexivel(raw, ['Data Recebimento Prestação', 'Data Recebime', 'Data Prestacao', 'Data Recebimento']);
 
     let ano = extrairValorFlexivel(raw, ['ANO', 'Ano', 'Exercicio', 'Exercício']);
@@ -127,6 +130,7 @@ export default function App() {
       Categoria: '',
       'Municipio de Origem': '',
       'Status Prestação de Contas': status,
+      'Data de Pagamento': dataPagamento,
       'Data Envio GAF': dataGaf,
       'Data Recebimento Prestação': dataPrestacao,
     };
@@ -236,24 +240,21 @@ export default function App() {
     return `${diaFmt}/${mesFmt}/${anoFmt}`;
   };
 
-  const calcularDataPagamentoPrevista = (dataStr: string | number | undefined): string => {
-    const dataEvento = converterParaObjetoData(dataStr);
-    if (!dataEvento) return 'A definir';
+  // O status da planilha é a referência para quitação; uma data isolada
+  // não comprova pagamento (há ordens bancárias devolvidas com data preenchida).
+  const estaPago = (item: ItemBase): boolean =>
+    String(item['Status Prestação de Contas'] || '').trim().toLocaleLowerCase('pt-BR') === 'pago';
 
-    dataEvento.setDate(dataEvento.getDate() + 35);
-
-    const diaFmt = String(dataEvento.getDate()).padStart(2, '0');
-    const mesFmt = String(dataEvento.getMonth() + 1).padStart(2, '0');
-    const anoFmt = dataEvento.getFullYear();
-
-    return `${diaFmt}/${mesFmt}/${anoFmt}`;
+  const obterSituacaoPagamento = (item: ItemBase): string => {
+    if (estaPago(item)) return 'Pago';
+    const status = String(item['Status Prestação de Contas'] || '').trim();
+    if (!status) return 'Situação não informada';
+    return 'Pagamento em tramitação';
   };
 
   const obterDataPagamentoRealizado = (item: ItemBase): string => {
-    if (item['Data Envio GAF']) return formatarDataSheet(item['Data Envio GAF']);
-    if (item['Data Recebimento Prestação']) return formatarDataSheet(item['Data Recebimento Prestação']);
-    if (item.Data) return formatarDataSheet(item.Data);
-    return 'Pago';
+    if (!estaPago(item)) return '—';
+    return item['Data de Pagamento'] ? formatarDataSheet(item['Data de Pagamento']) : 'Não informada';
   };
 
   const limparFiltros = () => {
@@ -282,8 +283,7 @@ export default function App() {
       const bateAno = anoSelecionado === 'Todos' || String(item.ANO).trim() === anoSelecionado;
       const bateMuni = muniFiltro === 'Todos' || item.Municipio === muniFiltro;
 
-      const statusTexto = String(item['Status Prestação de Contas'] || '').trim().toLowerCase();
-      const isPago = statusTexto.includes('pago');
+      const isPago = estaPago(item);
 
       let bateStatus = true;
       if (statusPagoFiltro === 'SIM') bateStatus = isPago;
@@ -304,7 +304,7 @@ export default function App() {
 
   const totalEfetivamentePago = useMemo(() => {
     return dadosFiltrados
-      .filter((d) => String(d['Status Prestação de Contas']).trim().toLowerCase().includes('pago'))
+      .filter(estaPago)
       .reduce((acc, curr) => acc + parseValor(curr.Valor), 0);
   }, [dadosFiltrados]);
 
@@ -320,12 +320,14 @@ export default function App() {
 
   const exportarCSV = () => {
     const dadosExportacao = dadosFiltrados.map((item) => {
-      const isPago = String(item['Status Prestação de Contas'] || '').trim().toLowerCase().includes('pago');
+      const isPago = estaPago(item);
       return {
-        ...item,
+        ...Object.fromEntries(Object.entries(item).filter(([chave]) =>
+          chave !== 'Data de Pagamento' && chave !== 'Status Prestação de Contas'
+        )),
         'Pago?': isPago ? 'Sim' : 'Não',
         'Data do Evento (Formatada)': formatarDataSheet(item.Data),
-        'Data do Pagamento / Previsão (+35d)': isPago ? obterDataPagamentoRealizado(item) : calcularDataPagamentoPrevista(item.Data),
+        'Data do Pagamento': isPago ? obterDataPagamentoRealizado(item) : '',
       };
     });
     const csv = Papa.unparse(dadosExportacao);
@@ -478,7 +480,7 @@ export default function App() {
               Painel de Pagamentos de Eventos e Apresentações Artísticas
             </h1>
             <p className="text-blue-100/80 text-[11px] sm:text-xs mt-1">
-              Transparência pública sobre os pagamentos e estimativas de liquidação da FUNDARPE.
+              Transparência pública sobre as apresentações e os pagamentos da FUNDARPE.
             </p>
           </div>
 
@@ -518,7 +520,7 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-emerald-300 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider">
-                    Total Pago Liquidado
+                    Total Pago
                   </p>
                   <h3 className="text-base sm:text-xl font-extrabold text-emerald-400 mt-0.5 sm:mt-1">
                     {carregando ? '...' : `R$ ${totalEfetivamentePago.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
@@ -548,7 +550,7 @@ export default function App() {
                 Relatório Detalhado de Apresentações e Pagamentos {anoSelecionado !== 'Todos' && `(${anoSelecionado})`}
               </h2>
               <p className="text-[11px] sm:text-xs text-slate-500">
-                Data real do pagamento exibida para processos pagos e previsão de +35 dias para os pendentes
+                Consulte a situação dos pagamentos e as informações disponíveis de cada apresentação
               </p>
             </div>
 
@@ -581,16 +583,15 @@ export default function App() {
                     <th className="p-3 font-bold min-w-[160px]">Credor</th>
                     <th className="p-3 font-bold">Município</th>
                     <th className="p-3 font-bold">Data Evento</th>
-                    <th className="p-3 font-bold">Pago?</th>
-                    <th className="p-3 font-bold min-w-[160px]">Data Pagamento / Previsão</th>
+                    <th className="p-3 font-bold min-w-[190px]">Situação do pagamento</th>
+                    <th className="p-3 font-bold min-w-[160px]">Data Pagamento</th>
                     <th className="p-3 text-right font-bold whitespace-nowrap">Valor Cachê</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {dadosPaginados.map((item, idx) => {
-                    const statusLower = String(item['Status Prestação de Contas'] || '').trim().toLowerCase();
-                    const isPago = statusLower.includes('pago');
-                    const dataPrevista = calcularDataPagamentoPrevista(item.Data);
+                    const isPago = estaPago(item);
+                    const situacaoPagamento = obterSituacaoPagamento(item);
                     const dataPagamentoReal = obterDataPagamentoRealizado(item);
                     const dataEventoFormatada = formatarDataSheet(item.Data);
 
@@ -606,20 +607,18 @@ export default function App() {
                         <td className="p-3 font-semibold text-amber-700">{item.Municipio}</td>
                         <td className="p-3 font-medium whitespace-nowrap text-slate-700">{dataEventoFormatada}</td>
                         
-                        {/* PAGO? */}
+                        {/* SITUAÇÃO DO PAGAMENTO */}
                         <td className="p-3 whitespace-nowrap">
-                          {isPago ? (
-                            <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full text-[10px] font-bold">
-                              <Check className="w-3 h-3 text-emerald-600" /> SIM
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-600 border border-slate-200 px-2.5 py-1 rounded-full text-[10px] font-bold">
-                              NÃO
-                            </span>
-                          )}
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border ${isPago
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-amber-50 text-amber-800 border-amber-200'
+                          }`}>
+                            {isPago && <Check className="w-3 h-3 text-emerald-600" />}
+                            {situacaoPagamento}
+                          </span>
                         </td>
 
-                        {/* DATA PAGAMENTO / PREVISÃO */}
+                        {/* DATA PAGAMENTO */}
                         <td className="p-3 whitespace-nowrap font-medium">
                           {isPago ? (
                             <span className="text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-md font-bold text-[11px] inline-flex items-center gap-1.5 shadow-sm">
@@ -627,10 +626,7 @@ export default function App() {
                               {dataPagamentoReal}
                             </span>
                           ) : (
-                            <span className="text-amber-800 bg-amber-50 border border-amber-200/80 px-2.5 py-1 rounded-md font-bold text-[11px] inline-flex items-center gap-1.5 shadow-sm">
-                              <Clock className="w-3.5 h-3.5 text-amber-600" />
-                              {dataPrevista} (Previsão)
-                            </span>
+                            <span className="text-slate-400 text-[11px]">—</span>
                           )}
                         </td>
 
